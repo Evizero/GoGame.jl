@@ -1,5 +1,7 @@
+__precompile__()
 module GoGame
 
+using Base.Cartesian
 using Crayons
 
 export
