@@ -1,3 +1,6 @@
+@inline _any(tup::NTuple{4}) = tup[1]|tup[2]|tup[3]|tup[4]
+@inline _sum(tup::NTuple{4}) = tup[1]+tup[2]+tup[3]+tup[4]
+
 function countliberties(state::AbstractArray{T}, liberties::AbstractArray{T}, groups::NTuple{4,T}) where T
     # unpack group groups (some groups may be 0, indicating empty space)
     @nexprs 4 k -> (group_k = groups[k])
@@ -67,7 +70,7 @@ function replacegroups!(state::AbstractArray{T}, groups::NTuple{4,T}, new_group:
         # Note: This will also yield `true` for empty positions if any
         #       of the groups is 0. We handle this issue below
         @nexprs 4 k -> (replace_k = (cur_flag == group_k))
-        cur_isreplace = any(@ntuple(4, k -> replace_k))
+        cur_isreplace = _any(@ntuple(4, k -> replace_k))
         # if the current position is not occupied (<1) we leave it
         # as is. If it is occupied we check if it is flagged for
         # replacement and if so replace it
@@ -91,7 +94,7 @@ function deletegroups!(state::AbstractArray{T}, liberties::AbstractArray{T}, gro
         # 1. if current position is part of any group (k ∈ 1:4)
         # 2. the group is marked for death (no more liberties)
         @nexprs 4 k -> (reset_k = isdeadgroup_k & (cur_flag==group_k))
-        cur_isreset = any(@ntuple(4, k -> reset_k))
+        cur_isreset = _any(@ntuple(4, k -> reset_k))
         state[i,j] = ifelse(cur_isreset, zero(T), cur_flag)
         # increase neighbors liberties by 1 if position was reseted
         # otherwise add 0 to it. This avoids braching
@@ -133,7 +136,7 @@ function unsafe_placestone!(state::AbstractArray{T}, liberties::AbstractArray{T}
         @inbounds liberties[i, j] = num_liberties
     elseif num_friends == 1
         # only one friendly stone around: join its group
-        group = sum(@ntuple 4 k -> get(friend_k, zero(T)))
+        group = _sum(@ntuple 4 k -> get(friend_k, zero(T)))
         @inbounds state[i, j] = group
         @inbounds liberties[i, j] = num_liberties
     else
