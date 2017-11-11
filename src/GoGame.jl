@@ -16,6 +16,7 @@ abstract type Ruleset end
 abstract type AbstractBoard{A<:AbstractArray,R<:Ruleset} end
 
 include("chinese.jl")
+include("array.jl")
 include("board.jl")
 include("io.jl")
 
