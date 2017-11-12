@@ -1,23 +1,26 @@
 __precompile__()
 module GoGame
 
-using Base.Cartesian
+using Base: Cartesian, @propagate_inbounds
+using StaticArrays
 using Crayons
 
 export
 
-    Board,
+    ChineseRuleset,
+
+    ArrayBoard,
+    isturn,
     islegal,
-    placestone,
-    pass
+    pass,
+    placestone
 
 abstract type Ruleset end
 
-abstract type AbstractBoard{A<:AbstractArray,R<:Ruleset} end
-
-include("chinese.jl")
-include("array.jl")
+include("utils.jl")
 include("board.jl")
+include("chinese.jl")
+include("arrayboard.jl")
 include("io.jl")
 
 end # module
