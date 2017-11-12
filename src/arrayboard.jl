@@ -59,34 +59,32 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
     friend_2, enemy_2 = getgroup(flags, isplayer1, i-1, j)
     friend_3, enemy_3 = getgroup(flags, isplayer1, i, j-1)
     friend_4, enemy_4 = getgroup(flags, isplayer1, i, j+1)
-    num_enemies = 4 - Int(isnull(enemy_1))  - Int(isnull(enemy_2))  - Int(isnull(enemy_3))  - Int(isnull(enemy_4))
-    num_friends = 4 - Int(isnull(friend_1)) - Int(isnull(friend_2)) - Int(isnull(friend_3)) - Int(isnull(friend_4))
+    # sum up how many friends and enemies are around
+    num_enemies = 4 - Int(iszero(enemy_1))  - Int(iszero(enemy_2))  - Int(iszero(enemy_3))  - Int(iszero(enemy_4))
+    num_friends = 4 - Int(iszero(friend_1)) - Int(iszero(friend_2)) - Int(iszero(friend_3)) - Int(iszero(friend_4))
     # compute the number of liberties at current position
     # note that the `ifelse` statements exist to handle
     # inbounds for the edges and corners of the board
     num_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2 - num_friends - num_enemies
     # if any liberty, don't even bother checking further
     if num_liberties > 0
-        # this is probably the most common branch
+        # this is surely the much more common branch
         return false
     else
         # we have to be sneaky and cheat here!
-        # in order to not double count group liberties we have to
-        # temporarily decrease the neighbours liberties
+        # in order to not double count group liberties we have
+        # to temporarily decrease the neighbours liberties.
         # this simulates us placing the stones
-        addliberties!(flags, liberties, i-1, j, -one(TL))
-        addliberties!(flags, liberties, i+1, j, -one(TL))
-        addliberties!(flags, liberties, i, j-1, -one(TL))
-        addliberties!(flags, liberties, i, j+1, -one(TL))
-        # unbox groups (some may be NULL, meaning no enemy/friend)
-        @nexprs 4 k -> enemy_grp_k  = get(enemy_k,  zero(TF))
-        @nexprs 4 k -> friend_grp_k = get(friend_k, zero(TF))
+        addliberties!(flags, liberties, i-1, j, TL(-1))
+        addliberties!(flags, liberties, i+1, j, TL(-1))
+        addliberties!(flags, liberties, i, j-1, TL(-1))
+        addliberties!(flags, liberties, i, j+1, TL(-1))
         # compute sum of liberties for surrounding groups
-        enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy_grp))
-        friend_libs = countliberties(flags, liberties, @ntuple(4, friend_grp))
+        enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy))
+        friend_libs = countliberties(flags, liberties, @ntuple(4, friend))
         # compute if group is actually a group and if it would die
-        @nexprs 4 k -> (isdeadenemy_k = (enemy_grp_k > zero(TF)) & (enemy_libs[k] < TL(2)))
-        @nexprs 4 k -> (isdeadfriend_k = (friend_grp_k > zero(TF)) & (friend_libs[k] < TL(2)))
+        @nexprs 4 k -> (isdeadenemy_k = (enemy_k > zero(TF)) & (enemy_libs[k] < TL(2)))
+        @nexprs 4 k -> (isdeadfriend_k = (friend_k > zero(TF)) & (friend_libs[k] < TL(2)))
         # check if there would be any capture or self capture
         anycapture = _any(@ntuple(4, isdeadenemy))
         anyselfcapture = _any(@ntuple(4, isdeadfriend))
@@ -130,8 +128,11 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     friend_2, enemy_2 = getgroup(flags, isplayer1, i-1, j)
     friend_3, enemy_3 = getgroup(flags, isplayer1, i, j-1)
     friend_4, enemy_4 = getgroup(flags, isplayer1, i, j+1)
-    num_enemies = 4 - Int(isnull(enemy_1))  - Int(isnull(enemy_2))  - Int(isnull(enemy_3))  - Int(isnull(enemy_4))
-    num_friends = 4 - Int(isnull(friend_1)) - Int(isnull(friend_2)) - Int(isnull(friend_3)) - Int(isnull(friend_4))
+    friends = @ntuple 4 k -> friend_k
+    enemies = @ntuple 4 k -> enemy_k
+    # sum up how many friends and enemies are around
+    num_enemies = 4 - Int(iszero(enemy_1))  - Int(iszero(enemy_2))  - Int(iszero(enemy_3))  - Int(iszero(enemy_4))
+    num_friends = 4 - Int(iszero(friend_1)) - Int(iszero(friend_2)) - Int(iszero(friend_3)) - Int(iszero(friend_4))
     # compute the number of liberties at current position
     # note that the `ifelse` statements exist to handle
     # inbounds for the edges and corners of the board
@@ -149,39 +150,36 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
         @inbounds liberties[i, j] = num_liberties
     elseif num_friends == 1
         # only one friendly stone around: join its group
-        group = _sum(@ntuple 4 k -> get(friend_k, zero(TF)))
-        @inbounds flags[i, j] = group
+        @inbounds flags[i, j] = _sum(friends)
         @inbounds liberties[i, j] = num_liberties
     else
         # multiple friendly stones around: create new group and absorb all
         next_group = TF(ifelse(isplayer1, state[GRP1_IDX], state[GRP2_IDX]))
         @inbounds state[GRP1_IDX] += ifelse(isplayer1, TS(2), TS(0))
         @inbounds state[GRP2_IDX] += ifelse(isplayer1, TS(0), TS(2))
-        old_groups = @ntuple 4 k -> get(friend_k, zero(TF))
-        replacegroups!(flags, old_groups, next_group)
+        replacegroups!(flags, friends, next_group)
         @inbounds flags[i, j] = next_group
         @inbounds liberties[i, j] = num_liberties
         # (note: liberties of friends are updated later)
     end
     # we placed the stone and created/merged groups
     # next we update surrounding liberties (if anyone is adjacent)
-    if num_liberties < 4 # TODO: maybe remove branch
-        addliberties!(flags, liberties, i-1, j, -one(TL))
-        addliberties!(flags, liberties, i+1, j, -one(TL))
-        addliberties!(flags, liberties, i, j-1, -one(TL))
-        addliberties!(flags, liberties, i, j+1, -one(TL))
+    if num_liberties < 4 # TODO: maybe remove condition to remove branch
+        addliberties!(flags, liberties, i-1, j, TL(-1))
+        addliberties!(flags, liberties, i+1, j, TL(-1))
+        addliberties!(flags, liberties, i, j-1, TL(-1))
+        addliberties!(flags, liberties, i, j+1, TL(-1))
     end
     # if an enemy is around, check if it should be captured
     # NOTE: this is expensive and thus condition gated
     if num_enemies > 0
-        enemy_groups = @ntuple 4 k -> get(enemy_k, zero(TF))
         # compute sum of liberties for surrounding enemy groups
-        enemy_libs = countliberties(flags, liberties, enemy_groups)
+        enemy_libs = countliberties(flags, liberties, enemies)
         # remove groups that have no liberty left (i.e. are now captured)
-        deletegroups!(flags, liberties, enemy_groups, enemy_libs)
+        deletegroups!(flags, liberties, enemies, enemy_libs)
     end
     # update state variables (turn counter, next player, etc)
-    @inbounds state[PLAYER_IDX] = TS(ifelse(isplayer1, 2, 1))
+    @inbounds state[PLAYER_IDX] = ifelse(isplayer1, TS(2), TS(1))
     @inbounds state[PASS_IDX] = TS(0)
     @inbounds state[TURN_IDX] += TS(1)
     board
@@ -243,10 +241,8 @@ function getgroup(flags::AA{T}, isplayer1::Bool, i::Integer, j::Integer) where {
     # if the current position is empty we return two Null
     # otherwise we return the flag as either friend or enemy,
     # depending on which player is making the current move
-    ifelse(ignore,(Nullable{T}(), Nullable{T}()),
-           ifelse(correct_player,
-                  (Nullable{T}(flag), Nullable{T}()),
-                  (Nullable{T}(),     Nullable{T}(flag))))
+    ifelse(ignore, (zero(T), zero(T)),
+           ifelse(correct_player, (flag, zero(T)), (zero(T), flag)))
 end
 
 function replacegroups!(flags::AA{T}, groups::NTuple{4,T}, new_group::T) where T
