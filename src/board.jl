@@ -22,6 +22,13 @@ Return true if it is `player`'s turn to make a move.
 isturn(board, player) = (player == nextplayer(board))
 
 """
+    isgameover(board) -> Bool
+
+Return true if the game has ended (e.g. both player pass).
+"""
+function isgameover end
+
+"""
     pass(board, player::Int)
 
 Advance game without placing a stone. This passes the control
@@ -44,7 +51,6 @@ function placestone(board::Board, player::Int, i, j)
     h, w = size(board)
     isturn(board, player) || error("Currently not player $player turn")
     islegal(board, player, i, j) || error("illegal move at ($i, $j)")
-
     unsafe_placestone!(board, i, j)
     # TODO: check if game is over?
     board

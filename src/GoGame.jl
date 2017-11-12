@@ -7,11 +7,19 @@ using Crayons
 
 export
 
+    # Rules
     ChineseRuleset,
 
+    # Board types
     ArrayBoard,
+
+    # info functions
     isturn,
     islegal,
+    issuicide,
+    isgameover,
+
+    # action functions
     pass,
     placestone
 

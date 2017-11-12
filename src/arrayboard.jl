@@ -18,6 +18,7 @@ function ArrayBoard(size::Int = 19, ruleset = ChineseRuleset())
 end
 
 # --------------------------------------------------------------------
+# public info methods
 
 Base.summary(board::ArrayBoard{R}) where {R} = string(join(size(board),'×'), ' ', typeof(board).name, '{', R, ",…}")
 Base.convert(::Type{Array}, board::ArrayBoard) = Array(board.flags)
@@ -39,6 +40,68 @@ end
     res
 end
 
+@inline function isgameover(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}) where {R, TF, TL, TS}
+    @inbounds res = board.state[PASS_IDX] >= TS(2)
+    res
+end
+
+function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j) where {R, TF, TL, TS}
+    flags = board.flags
+    liberties = board.liberties
+    state = board.state
+    h, w = size(board)
+    @boundscheck (1 <= i <= h) && (1 <= j <= w)
+    # check who is playing (we assume its the given player's turn)
+    isplayer1 = player == 1
+    # see how many friendly and enemy stones are adjacent
+    # 1=up, 2=down, 3=left, 4=right
+    friend_1, enemy_1 = getgroup(flags, isplayer1, i+1, j)
+    friend_2, enemy_2 = getgroup(flags, isplayer1, i-1, j)
+    friend_3, enemy_3 = getgroup(flags, isplayer1, i, j-1)
+    friend_4, enemy_4 = getgroup(flags, isplayer1, i, j+1)
+    num_enemies = 4 - Int(isnull(enemy_1))  - Int(isnull(enemy_2))  - Int(isnull(enemy_3))  - Int(isnull(enemy_4))
+    num_friends = 4 - Int(isnull(friend_1)) - Int(isnull(friend_2)) - Int(isnull(friend_3)) - Int(isnull(friend_4))
+    # compute the number of liberties at current position
+    # note that the `ifelse` statements exist to handle
+    # inbounds for the edges and corners of the board
+    num_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2 - num_friends - num_enemies
+    # if any liberty, don't even bother checking further
+    if num_liberties > 0
+        # this is probably the most common branch
+        return false
+    else
+        # we have to be sneaky and cheat here!
+        # in order to not double count group liberties we have to
+        # temporarily decrease the neighbours liberties
+        # this simulates us placing the stones
+        addliberties!(flags, liberties, i-1, j, -one(TL))
+        addliberties!(flags, liberties, i+1, j, -one(TL))
+        addliberties!(flags, liberties, i, j-1, -one(TL))
+        addliberties!(flags, liberties, i, j+1, -one(TL))
+        # unbox groups (some may be NULL, meaning no enemy/friend)
+        @nexprs 4 k -> enemy_grp_k  = get(enemy_k,  zero(TF))
+        @nexprs 4 k -> friend_grp_k = get(friend_k, zero(TF))
+        # compute sum of liberties for surrounding groups
+        enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy_grp))
+        friend_libs = countliberties(flags, liberties, @ntuple(4, friend_grp))
+        # compute if group is actually a group and if it would die
+        @nexprs 4 k -> (isdeadenemy_k = (enemy_grp_k > zero(TF)) & (enemy_libs[k] < TL(2)))
+        @nexprs 4 k -> (isdeadfriend_k = (friend_grp_k > zero(TF)) & (friend_libs[k] < TL(2)))
+        # check if there would be any capture or self capture
+        anycapture = _any(@ntuple(4, isdeadenemy))
+        anyselfcapture = _any(@ntuple(4, isdeadfriend))
+        # now lets add back those temporary liberties
+        addliberties!(flags, liberties, i-1, j, one(TL))
+        addliberties!(flags, liberties, i+1, j, one(TL))
+        addliberties!(flags, liberties, i, j-1, one(TL))
+        addliberties!(flags, liberties, i, j+1, one(TL))
+        # if any enemy gets captured then it's not considered suicide
+        # if no enemy gets captured then there must be at least
+        # one friendly group that wouldn't self capture
+        ifelse(anycapture, false, ifelse(num_friends>0, anyselfcapture, true))
+    end
+end
+
 # --------------------------------------------------------------------
 # main methods for advancing the game
 
@@ -46,7 +109,7 @@ end
 function unsafe_pass!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}) where {R, TF, TL, TS}
     state = board.state
     # update state variables (turn counter, next player, etc)
-    @inbounds state[PLAYER_IDX] = TS(ifelse(isplayer1, 2, 1))
+    @inbounds state[PLAYER_IDX] = ifelse(isplayer1, TS(2), TS(1))
     @inbounds state[PASS_IDX] += TS(1)
     @inbounds state[TURN_IDX] += TS(1)
     board
@@ -103,10 +166,10 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     # we placed the stone and created/merged groups
     # next we update surrounding liberties (if anyone is adjacent)
     if num_liberties < 4 # TODO: maybe remove branch
-        decreaseliberties!(flags, liberties, i-1, j)
-        decreaseliberties!(flags, liberties, i+1, j)
-        decreaseliberties!(flags, liberties, i, j-1)
-        decreaseliberties!(flags, liberties, i, j+1)
+        addliberties!(flags, liberties, i-1, j, -one(TL))
+        addliberties!(flags, liberties, i+1, j, -one(TL))
+        addliberties!(flags, liberties, i, j-1, -one(TL))
+        addliberties!(flags, liberties, i, j+1, -one(TL))
     end
     # if an enemy is around, check if it should be captured
     # NOTE: this is expensive and thus condition gated
@@ -149,7 +212,7 @@ function countliberties(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}) whe
     @ntuple 4 k -> total_libs_k
 end
 
-function decreaseliberties!(flags::AA{T}, liberties::AA{R}, i::Integer, j::Integer) where {T,R}
+function addliberties!(flags::AA{T}, liberties::AA{R}, i::Integer, j::Integer, delta) where {T,R}
     h, w = size(flags)
     # clamp the indices to legal range to avoid branches
     # this is just so that we don't get bounds issues
@@ -161,7 +224,7 @@ function decreaseliberties!(flags::AA{T}, liberties::AA{R}, i::Integer, j::Integ
     # ignore any empty positions as well as clamped indices
     ignore = (flag < one(T)) | (ti != i) | (tj != j)
     # decrease liberties unless position is ignored
-    @inbounds liberties[ti, tj] = ifelse(ignore, libs, libs - one(R))
+    @inbounds liberties[ti, tj] = ifelse(ignore, libs, libs + R(delta))
     nothing
 end
 
