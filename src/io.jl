@@ -18,15 +18,16 @@ function Base.show(io::IO, ::MIME"text/plain", board::Board{R}) where R
     println(io, cr_reset, summary(board), ':')
     printletters(io, board)
     println(io, cr_reset, " "^6,  "┌──── STATE ────┐")
-    state = convert(Array, board)
+    flags = convert(Array, board)
     for i in h:-1:1
         istr = lpad(i,3)
         for j in 1:w
             jstr = lpad(i,2)
-            flag = state[i,j]
+            flag = flags[i,j]
             j == 1 && print(io, cr_reset, istr, " ", cr_wood, " ")
-            if flag < 0
-                # these are special flags like "ko"
+            if isko(board, i, j)
+                print(io, cr_wood, "⦻")
+                j < w && print(io, cr_wood, "─")
             elseif flag > 0
                 if isodd(Int(flag)) # isplayer1
                     #print(io, cr_wood*cr_black, Int(flag))

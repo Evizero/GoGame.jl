@@ -1,4 +1,4 @@
-const GRP1_IDX, GRP2_IDX, TURN_IDX, PASS_IDX, PLAYER_IDX = 1, 2, 3, 4, 5
+const GRP1_IDX, GRP2_IDX, TURN_IDX, PASS_IDX, PLAYER_IDX, KO_IDX = 1, 2, 3, 4, 5, 6
 
 # --------------------------------------------------------------------
 
@@ -6,14 +6,14 @@ struct ArrayBoard{R,A<:AA,L<:AA,S<:AA} <: Board{R}
     ruleset::R
     flags::A
     liberties::L
-    state::S # [group_black, group_white, turn, numpass, nextplayer]
+    state::S # [group_black, group_white, turn, numpass, nextplayer, ko]
 end
 
 function ArrayBoard(size::Int = 19, ruleset = ChineseRuleset())
     size ∈ (9, 13, 17, 19) || error("Illegal board size $size")
     flags = zeros(Int, size, size)
     libs  = zeros(Int, size, size)
-    state = MVector(1, 2, 1, 0, 1)
+    state = MVector(1, 2, 1, 0, 1, 0)
     ArrayBoard(ruleset, flags, libs, state)
 end
 
@@ -27,8 +27,10 @@ Base.convert(::Type{Array}, board::ArrayBoard) = Array(board.flags)
 @propagate_inbounds isempty(board::ArrayBoard,i,j) =
     iszero(board.flags[i,j])
 
-@propagate_inbounds isko(board::ArrayBoard,i,j) =
-    signbit(board.flags[i,j])
+@inline function isko(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}},i,j) where {R, TF, TL, TS}
+    @inbounds ko_idx = Int(board.state[KO_IDX])
+    sub2ind(size(board), i, j) == ko_idx
+end
 
 @inline function turn(board::ArrayBoard)
     @inbounds res = Int(board.state[TURN_IDX])
@@ -65,7 +67,8 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
     # compute the number of liberties at current position
     # note that the `ifelse` statements exist to handle
     # inbounds for the edges and corners of the board
-    num_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2 - num_friends - num_enemies
+    max_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2
+    num_liberties = max_liberties - num_friends - num_enemies
     # if any liberty, don't even bother checking further
     if num_liberties > 0
         # this is surely the much more common branch
@@ -83,11 +86,11 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
         enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy))
         friend_libs = countliberties(flags, liberties, @ntuple(4, friend))
         # compute if group is actually a group and if it would die
-        @nexprs 4 k -> (isdeadenemy_k = (enemy_k > zero(TF)) & (enemy_libs[k] < TL(2)))
-        @nexprs 4 k -> (isdeadfriend_k = (friend_k > zero(TF)) & (friend_libs[k] < TL(2)))
+        @nexprs 4 k -> (isdeadenemy_k = (enemy_k > zero(TF)) & (enemy_libs[k] < TL(1)))
+        @nexprs 4 k -> (isdeadfriend_k = (friend_k > zero(TF)) & (friend_libs[k] < TL(1)))
         # check if there would be any capture or self capture
         anycapture = _any(@ntuple(4, isdeadenemy))
-        anyselfcapture = _any(@ntuple(4, isdeadfriend))
+        anyselfcapture = _sum(@ntuple(4, isdeadfriend)) >= num_friends
         # now lets add back those temporary liberties
         addliberties!(flags, liberties, i-1, j, one(TL))
         addliberties!(flags, liberties, i+1, j, one(TL))
@@ -103,7 +106,7 @@ end
 # --------------------------------------------------------------------
 # main methods for advancing the game
 
-# unsafe because we assume move is by current player
+# we assume move is by current player and game is not over
 function unsafe_pass!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}) where {R, TF, TL, TS}
     state = board.state
     # update state variables (turn counter, next player, etc)
@@ -113,7 +116,7 @@ function unsafe_pass!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}) where {R,
     board
 end
 
-# unsafe because we assume move is by current player, legal, and inbounds
+# we assume move is by current player, legal, and inbounds
 function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, j) where {R, TF, TL, TS}
     flags = board.flags
     liberties = board.liberties
@@ -136,7 +139,8 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     # compute the number of liberties at current position
     # note that the `ifelse` statements exist to handle
     # inbounds for the edges and corners of the board
-    num_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2 - num_friends - num_enemies
+    max_liberties = ifelse(i==1,0,ifelse(i==h,0,1)) + ifelse(j==1,0,ifelse(j==w,0,1)) + 2
+    num_liberties = max_liberties - num_friends - num_enemies
     # first lets see if there are friendly groups around
     # NOTE: we introduce a branching here because replacing existing
     #       groups is expensive (because it needs a full pass through
@@ -165,18 +169,28 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     # we placed the stone and created/merged groups
     # next we update surrounding liberties (if anyone is adjacent)
     if num_liberties < 4 # TODO: maybe remove condition to remove branch
-        addliberties!(flags, liberties, i-1, j, TL(-1))
         addliberties!(flags, liberties, i+1, j, TL(-1))
+        addliberties!(flags, liberties, i-1, j, TL(-1))
         addliberties!(flags, liberties, i, j-1, TL(-1))
         addliberties!(flags, liberties, i, j+1, TL(-1))
     end
+    # reset ko since we may or may not overwrite it
+    @inbounds state[KO_IDX] = TS(0)
     # if an enemy is around, check if it should be captured
     # NOTE: this is expensive and thus condition gated
     if num_enemies > 0
         # compute sum of liberties for surrounding enemy groups
         enemy_libs = countliberties(flags, liberties, enemies)
         # remove groups that have no liberty left (i.e. are now captured)
-        deletegroups!(flags, liberties, enemies, enemy_libs)
+        num_del = deletegroups!(flags, liberties, enemies, enemy_libs)
+        # check if only one stone was removed (potential ko)
+        is1 = _sum(num_del) == 1
+        koidx = ifelse(is1 & (num_del[1]==1), sub2ind((h,w),i+1,j), 0)
+        koidx = ifelse(is1 & (num_del[2]==1), sub2ind((h,w),i-1,j), koidx)
+        koidx = ifelse(is1 & (num_del[3]==1), sub2ind((h,w),i,j-1), koidx)
+        koidx = ifelse(is1 & (num_del[4]==1), sub2ind((h,w),i,j+1), koidx)
+        # if also initially surrounded my enemies then its a ko
+        @inbounds state[KO_IDX] = ifelse(max_liberties == num_enemies, TS(koidx), TS(0))
     end
     # update state variables (turn counter, next player, etc)
     @inbounds state[PLAYER_IDX] = ifelse(isplayer1, TS(2), TS(1))
@@ -271,6 +285,8 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
     @nexprs 4 k -> (group_k = groups[k])
     # compute if group is actually a group and if its dead
     @nexprs 4 k -> (isdeadgroup_k = (group_k > zero(T)) & (libs[k] < one(R)))
+    # initialize total-delete counter for each (potential) group
+    @nexprs 4 k -> (total_delete_k = 0)
     # we have to loop through the whole board once
     @inbounds for j in 1:w, i in 1:h
         cur_flag = flags[i,j]
@@ -279,6 +295,7 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
         # 1. the current position is part of some given group (k ∈ 1:4)
         # 2. the group is marked for death (no more liberties)
         @nexprs 4 k -> (reset_k = isdeadgroup_k & (cur_flag==group_k))
+        @nexprs 4 k -> (total_delete_k += ifelse(reset_k, 1, 0))
         cur_isreset = _any(@ntuple(4, k -> reset_k))
         flags[i,j] = ifelse(cur_isreset, zero(T), cur_flag)
         # increase neighbors liberties by 1 if position was reset
@@ -292,5 +309,6 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
         liberties[i, ifelse(j==1,1,j-1)] += delta_liberty
         liberties[i, ifelse(j==w,w,j+1)] += delta_liberty
     end
-    nothing
+    # return the total number of removed stones for each of the 4 groups
+    @ntuple 4 k -> total_delete_k
 end
