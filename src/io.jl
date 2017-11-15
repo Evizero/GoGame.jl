@@ -28,8 +28,8 @@ function Base.show(io::IO, ::MIME"text/plain", board::Board{R}) where R
             if isko(board, i, j)
                 print(io, cr_wood, "⦻")
                 j < w && print(io, cr_wood, "─")
-            elseif flag > 0
-                if isodd(Int(flag)) # isplayer1
+            elseif !iszero(flag)
+                if flag > 0 # isplayer1
                     #print(io, cr_wood*cr_black, Int(flag))
                     print(io, cr_wood*cr_black, "⚈")
                     j < w && print(io, cr_wood, "─")

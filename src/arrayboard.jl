@@ -13,7 +13,7 @@ function ArrayBoard(size::Int = 19, ruleset = ChineseRuleset())
     size ∈ (9, 13, 17, 19) || error("Illegal board size $size")
     flags = zeros(Int, size, size)
     libs  = zeros(Int, size, size)
-    state = MVector(1, 2, 1, 0, 1, 0)
+    state = MVector(1, -1, 1, 0, 1, 0)
     ArrayBoard(ruleset, flags, libs, state)
 end
 
@@ -86,16 +86,16 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
         enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy))
         friend_libs = countliberties(flags, liberties, @ntuple(4, friend))
         # compute if group is actually a group and if it would die
-        @nexprs 4 k -> (isdeadenemy_k = (enemy_k > zero(TF)) & (enemy_libs[k] < TL(1)))
-        @nexprs 4 k -> (isdeadfriend_k = (friend_k > zero(TF)) & (friend_libs[k] < TL(1)))
+        @nexprs 4 k -> (isdeadenemy_k = (!iszero(enemy_k)) & (enemy_libs[k] < TL(1)))
+        @nexprs 4 k -> (isdeadfriend_k = (!iszero(friend_k)) & (friend_libs[k] < TL(1)))
         # check if there would be any capture or self capture
         anycapture = _any(@ntuple(4, isdeadenemy))
         anyselfcapture = _sum(@ntuple(4, isdeadfriend)) >= num_friends
         # now lets add back those temporary liberties
-        addliberties!(flags, liberties, i-1, j, one(TL))
-        addliberties!(flags, liberties, i+1, j, one(TL))
-        addliberties!(flags, liberties, i, j-1, one(TL))
-        addliberties!(flags, liberties, i, j+1, one(TL))
+        addliberties!(flags, liberties, i-1, j, TL(1))
+        addliberties!(flags, liberties, i+1, j, TL(1))
+        addliberties!(flags, liberties, i, j-1, TL(1))
+        addliberties!(flags, liberties, i, j+1, TL(1))
         # if any enemy gets captured then it's not considered suicide
         # if no enemy gets captured then there must be at least
         # one friendly group that wouldn't self capture
@@ -148,8 +148,8 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     if num_friends == 0
         # no friendly stone around: create new group
         next_group = TF(ifelse(isplayer1, state[GRP1_IDX], state[GRP2_IDX]))
-        @inbounds state[GRP1_IDX] += ifelse(isplayer1, TS(2), TS(0))
-        @inbounds state[GRP2_IDX] += ifelse(isplayer1, TS(0), TS(2))
+        @inbounds state[GRP1_IDX] += ifelse(isplayer1, TS(1), TS(0))
+        @inbounds state[GRP2_IDX] += ifelse(isplayer1, TS(0), TS(-1))
         @inbounds flags[i, j] = next_group
         @inbounds liberties[i, j] = num_liberties
     elseif num_friends == 1
@@ -159,8 +159,8 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     else
         # multiple friendly stones around: create new group and absorb all
         next_group = TF(ifelse(isplayer1, state[GRP1_IDX], state[GRP2_IDX]))
-        @inbounds state[GRP1_IDX] += ifelse(isplayer1, TS(2), TS(0))
-        @inbounds state[GRP2_IDX] += ifelse(isplayer1, TS(0), TS(2))
+        @inbounds state[GRP1_IDX] += ifelse(isplayer1, TS(1), TS(0))
+        @inbounds state[GRP2_IDX] += ifelse(isplayer1, TS(0), TS(-1))
         replacegroups!(flags, friends, next_group)
         @inbounds flags[i, j] = next_group
         @inbounds liberties[i, j] = num_liberties
@@ -206,19 +206,19 @@ function countliberties(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}) whe
     # unpack groups (some groups may be 0, indicating empty positions)
     @nexprs 4 k -> (group_k = groups[k])
     # initialize total-liberties counter for each (potential) group
-    @nexprs 4 k -> (total_libs_k = zero(R))
+    @nexprs 4 k -> (total_libs_k = R(0))
     # we have to loop through the whole board once
     @inbounds for I in eachindex(flags)
         cur_flag = flags[I]
-        # if the current position is unoccupied (flag<1) we say it
+        # if the current position is unoccupied (flag==0) we say it
         # has no liberties. We have to do this since the stored
         # value for unoccupied spaces is in general nonsense
-        cur_libs = ifelse(cur_flag < one(T), zero(R), liberties[I])
+        cur_libs = ifelse(iszero(cur_flag), R(0), liberties[I])
         # increment counter for the group that the current position
         # belongs to. Other counters are incremented by 0 as no-op.
         # Note: If some or multiple `group_k` are 0 (i.e. not a group)
         #       then this works out anyway.
-        @nexprs 4 k -> (total_libs_k += ifelse(cur_flag == group_k, cur_libs, zero(R)))
+        @nexprs 4 k -> (total_libs_k += ifelse(cur_flag == group_k, cur_libs, R(0)))
     end
     # return the total liberties for each of the 4 groups
     @ntuple 4 k -> total_libs_k
@@ -234,7 +234,7 @@ function addliberties!(flags::AA{T}, liberties::AA{R}, i::Integer, j::Integer, d
     @inbounds flag = flags[ti, tj]
     @inbounds libs = liberties[ti, tj]
     # ignore any empty positions as well as clamped indices
-    ignore = (flag < one(T)) | (ti != i) | (tj != j)
+    ignore = iszero(flag) | (ti != i) | (tj != j)
     # decrease liberties unless position is ignored
     @inbounds liberties[ti, tj] = ifelse(ignore, libs, libs + R(delta))
     nothing
@@ -249,14 +249,14 @@ function getgroup(flags::AA{T}, isplayer1::Bool, i::Integer, j::Integer) where {
     tj = clamp(j, one(j), w)
     @inbounds flag = flags[ti, tj]
     # ignore any empty positions as well as clamped indices
-    ignore = (flag < one(T)) | (ti != i) | (tj != j)
+    ignore = iszero(flag) | (ti != i) | (tj != j)
     # check if the flag is a group of the current player
-    correct_player = ifelse(isplayer1, isodd(Int(flag)), iseven(Int(flag)))
+    correct_player = ifelse(isplayer1, flag > T(0), flag < T(0))
     # if the current position is empty we return two Null
     # otherwise we return the flag as either friend or enemy,
     # depending on which player is making the current move
-    ifelse(ignore, (zero(T), zero(T)),
-           ifelse(correct_player, (flag, zero(T)), (zero(T), flag)))
+    ifelse(ignore, (T(0), T(0)),
+           ifelse(correct_player, (flag, T(0)), (T(0), flag)))
 end
 
 function replacegroups!(flags::AA{T}, groups::NTuple{4,T}, new_group::T) where T
@@ -270,10 +270,10 @@ function replacegroups!(flags::AA{T}, groups::NTuple{4,T}, new_group::T) where T
         #       of the groups is 0. We handle this issue below
         @nexprs 4 k -> (replace_k = (cur_flag == group_k))
         cur_isreplace = _any(@ntuple(4, k -> replace_k))
-        # if the current position is not occupied (flag<1) we leave
+        # if the current position is not occupied (flag==0) we leave
         # it as is. If it is occupied we check if it is flagged for
         # replacement and if so replace it
-        flags[I] = ifelse(cur_flag < one(T), cur_flag,
+        flags[I] = ifelse(iszero(cur_flag), cur_flag,
                           ifelse(cur_isreplace, new_group, cur_flag))
     end
     nothing
@@ -284,7 +284,7 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
     # unpack groups (some groups may be 0, indicating empty positions)
     @nexprs 4 k -> (group_k = groups[k])
     # compute if group is actually a group and if its dead
-    @nexprs 4 k -> (isdeadgroup_k = (group_k > zero(T)) & (libs[k] < one(R)))
+    @nexprs 4 k -> (isdeadgroup_k = (!iszero(group_k)) & (libs[k] < R(1)))
     # initialize total-delete counter for each (potential) group
     @nexprs 4 k -> (total_delete_k = 0)
     # we have to loop through the whole board once
@@ -297,7 +297,7 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
         @nexprs 4 k -> (reset_k = isdeadgroup_k & (cur_flag==group_k))
         @nexprs 4 k -> (total_delete_k += ifelse(reset_k, 1, 0))
         cur_isreset = _any(@ntuple(4, k -> reset_k))
-        flags[i,j] = ifelse(cur_isreset, zero(T), cur_flag)
+        flags[i,j] = ifelse(cur_isreset, T(0), cur_flag)
         # increase neighbors liberties by 1 if position was reset
         # otherwise add 0 to it as no-op. This avoids branching.
         delta_liberty = T(cur_isreset)
