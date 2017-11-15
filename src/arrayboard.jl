@@ -56,10 +56,10 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
     # check who is playing (we assume its the given player's turn)
     isplayer1 = player == 1
     # see how many friendly and enemy stones are adjacent
-    # 1=up, 2=down, 3=left, 4=right
-    friend_1, enemy_1 = getgroup(flags, isplayer1, i+1, j)
+    # 1=>left, 2=>down, 3=>up, 4=>right
+    friend_1, enemy_1 = getgroup(flags, isplayer1, i, j-1)
     friend_2, enemy_2 = getgroup(flags, isplayer1, i-1, j)
-    friend_3, enemy_3 = getgroup(flags, isplayer1, i, j-1)
+    friend_3, enemy_3 = getgroup(flags, isplayer1, i+1, j)
     friend_4, enemy_4 = getgroup(flags, isplayer1, i, j+1)
     # sum up how many friends and enemies are around
     num_enemies = 4 - Int(iszero(enemy_1))  - Int(iszero(enemy_2))  - Int(iszero(enemy_3))  - Int(iszero(enemy_4))
@@ -78,9 +78,9 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
         # in order to not double count group liberties we have
         # to temporarily decrease the neighbours liberties.
         # this simulates us placing the stones
+        addliberties!(flags, liberties, i, j-1, TL(-1))
         addliberties!(flags, liberties, i-1, j, TL(-1))
         addliberties!(flags, liberties, i+1, j, TL(-1))
-        addliberties!(flags, liberties, i, j-1, TL(-1))
         addliberties!(flags, liberties, i, j+1, TL(-1))
         # compute sum of liberties for surrounding groups
         enemy_libs  = countliberties(flags, liberties, @ntuple(4, enemy))
@@ -92,14 +92,14 @@ function issuicide(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, player, i, j
         anycapture = _any(@ntuple(4, isdeadenemy))
         anyselfcapture = _sum(@ntuple(4, isdeadfriend)) >= num_friends
         # now lets add back those temporary liberties
+        addliberties!(flags, liberties, i, j-1, TL(1))
         addliberties!(flags, liberties, i-1, j, TL(1))
         addliberties!(flags, liberties, i+1, j, TL(1))
-        addliberties!(flags, liberties, i, j-1, TL(1))
         addliberties!(flags, liberties, i, j+1, TL(1))
         # if any enemy gets captured then it's not considered suicide
         # if no enemy gets captured then there must be at least
         # one friendly group that wouldn't self capture
-        ifelse(anycapture, false, ifelse(num_friends>0, anyselfcapture, true))
+        ifelse(anycapture, false, ifelse(num_friends > 0, anyselfcapture, true))
     end
 end
 
@@ -126,10 +126,10 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     player = nextplayer(board)
     isplayer1 = player == 1
     # see how many friendly and enemy stones are adjacent
-    # 1=>up, 2=>down, 3=>left, 4=>right
-    friend_1, enemy_1 = getgroup(flags, isplayer1, i+1, j)
+    # 1=>left, 2=>down, 3=>up, 4=>right
+    friend_1, enemy_1 = getgroup(flags, isplayer1, i, j-1)
     friend_2, enemy_2 = getgroup(flags, isplayer1, i-1, j)
-    friend_3, enemy_3 = getgroup(flags, isplayer1, i, j-1)
+    friend_3, enemy_3 = getgroup(flags, isplayer1, i+1, j)
     friend_4, enemy_4 = getgroup(flags, isplayer1, i, j+1)
     friends = @ntuple 4 k -> friend_k
     enemies = @ntuple 4 k -> enemy_k
@@ -169,9 +169,9 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
     # we placed the stone and created/merged groups
     # next we update surrounding liberties (if anyone is adjacent)
     if num_liberties < 4 # TODO: maybe remove condition to remove branch
-        addliberties!(flags, liberties, i+1, j, TL(-1))
-        addliberties!(flags, liberties, i-1, j, TL(-1))
         addliberties!(flags, liberties, i, j-1, TL(-1))
+        addliberties!(flags, liberties, i-1, j, TL(-1))
+        addliberties!(flags, liberties, i+1, j, TL(-1))
         addliberties!(flags, liberties, i, j+1, TL(-1))
     end
     # reset ko since we may or may not overwrite it
@@ -185,9 +185,9 @@ function unsafe_placestone!(board::ArrayBoard{R,<:AA{TF},<:AA{TL},<:AA{TS}}, i, 
         num_del = deletegroups!(flags, liberties, enemies, enemy_libs)
         # check if only one stone was removed (potential ko)
         is1 = _sum(num_del) == 1
-        koidx = ifelse(is1 & (num_del[1]==1), sub2ind((h,w),i+1,j), 0)
+        koidx = ifelse(is1 & (num_del[1]==1), sub2ind((h,w),i,j-1), 0)
         koidx = ifelse(is1 & (num_del[2]==1), sub2ind((h,w),i-1,j), koidx)
-        koidx = ifelse(is1 & (num_del[3]==1), sub2ind((h,w),i,j-1), koidx)
+        koidx = ifelse(is1 & (num_del[3]==1), sub2ind((h,w),i+1,j), koidx)
         koidx = ifelse(is1 & (num_del[4]==1), sub2ind((h,w),i,j+1), koidx)
         # if also initially surrounded my enemies then its a ko
         @inbounds state[KO_IDX] = ifelse(max_liberties == num_enemies, TS(koidx), TS(0))
@@ -304,9 +304,9 @@ function deletegroups!(flags::AA{T}, liberties::AA{R}, groups::NTuple{4,T}, libs
         # note that unoccupied places will have senseless liberties.
         # if at the edge of the board it will add liberties to itself
         # both is completely fine. these values are reset on placement.
-        liberties[ifelse(i==h,h,i+1), j] += delta_liberty
-        liberties[ifelse(i==1,1,i-1), j] += delta_liberty
         liberties[i, ifelse(j==1,1,j-1)] += delta_liberty
+        liberties[ifelse(i==1,1,i-1), j] += delta_liberty
+        liberties[ifelse(i==h,h,i+1), j] += delta_liberty
         liberties[i, ifelse(j==w,w,j+1)] += delta_liberty
     end
     # return the total number of removed stones for each of the 4 groups
